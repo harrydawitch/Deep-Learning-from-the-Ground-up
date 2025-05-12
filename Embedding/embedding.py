@@ -4,49 +4,43 @@ import numpy as np
 
 
 class PositionalEmbedding(nn.Module):
-    def __init__(self, d_model: int, max_len: int = 5000):
+    def __init__(self, d_model: int, max_len: int, device):
         super().__init__()
+        
         if d_model % 2 != 0:
             raise ValueError("d_model must be even for sine/cosine positional embeddings")
 
-        self.d_model = d_model
         
-        pe = torch.zeros(max_len, d_model)
-        pos = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
-        div_term = torch.exp(torch.arange(0, d_model, 2, dtype=torch.float) * -(np.log(10000.0) / d_model))
-        pe[:, 0::2] = torch.sin(pos * div_term)
-        pe[:, 1::2] = torch.cos(pos * div_term)
-        pe = pe.unsqueeze(0)  
-        self.register_buffer('pe', pe)
+        pe = torch.zeros(max_len, d_model, device= device)
+        pe.requires_grad = False
+        
+        pos = torch.arange(0, max_len, dtype=torch.float, device= device).unsqueeze(1)
+        
+        _2i = torch.arange(0, d_model, step=2, device=device).float()
+        
+        pe[:, 0::2] = torch.sin(pos / (10000 ** (_2i / d_model)))
+        pe[:, 1::2] = torch.cos(pos / (10000 ** (_2i / d_model)))
+        
+        self.register_buffer("pe", pe)
+
 
     def forward(self, x):
         """
         x: Tensor of shape [batch_size, seq_len, d_model]
         """
         seq_len = x.size(1)
-        return self.pe[:, :seq_len]
+        return self.pe[:seq_len, :]
 
     
-class WordEmbedding(nn.Module):
+class WordEmbedding(nn.Embedding):
     def __init__(self,
-                 num_emb: int, 
-                 emb_dim: int
+                 vocab_size: int, 
+                 d_model: int
                  ):
         
-        super().__init__()
+        super().__init__(vocab_size, d_model, padding_idx= 1)
         
-        self.embedding_matrix= nn.Parameter(torch.randn(num_emb, emb_dim))
         
-    def forward(self, 
-                x: list
-                ):
-        """Mapping each token inside list of tokens with their corresponding embedding vector
 
-        Parameters
-        ----------
-        x : list
-            list of tokens
-        """
-        return self.embedding_matrix[x, :]
-        
+
 
