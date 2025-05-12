@@ -1,6 +1,8 @@
 
-def tokenizer(sentence: str):
-    return list(sentence)
+def tokenizer(sentence: str, max_seq= 100):
+    
+    sequence= list(sentence)
+    
 
 def get_vocab(txt_file: str):
     
@@ -8,7 +10,7 @@ def get_vocab(txt_file: str):
         text = f.read()
         
     unique = sorted(list(set(text)))
-    
+
     return unique
 
 def mapping(tokens, vocab_path, mode= "toidx"):

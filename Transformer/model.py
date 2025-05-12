@@ -1,34 +1,39 @@
 import torch
 import torch.nn as nn
-import numpy as np
-
+from Embedding import PositionalEmbedding, WordEmbedding
 from transformer_utils import tokenizer, mapping, get_vocab
 
-class FeedForward(nn.Module):
-    def __init__(self, d_model):
+
+class Embedding(nn.Module):
+    def __init__(self, vocab_size, d_model, max_len, device, dropout_prop):
         super().__init__()
         
-        self.linear1 = nn.Linear(d_model, 2048)
-        self.relu = nn.ReLU(inplace= True)
-        self.linear2 = nn.Linear(2048, d_model)
+        self.d_model = d_model
+        
+        self.pos_embedding = PositionalEmbedding(d_model, max_len, device)
+        self.word_embedding = WordEmbedding(vocab_size, d_model)
+        self.dropout = nn.Dropout(p= dropout_prop)
         
     def forward(self, x):
-        x = self.linear2(self.relu(self.linear1(x)))
-        return x
+        word_emb = self.word_embedding(x)
+        pos_emb = self.pos_embedding(x)
+        
+        return self.dropout((word_emb + pos_emb) * torch.sqrt(torch.tensor(self.d_model)))
+    
 
 class Encoder(nn.Module):
-    def __init__(self,
-                 d_model: int,
-                 n_head: int,
-                 ):
+    def __init__(self, d_model, n_head, vocab_size,  max_len, device, dropout_prop):
         super().__init__()
         
+        self.emb = Embedding(vocab_size, d_model, max_len, device, dropout_prop)
         self.mul_attn = nn.MultiheadAttention(d_model, n_head, batch_first= True)
         self.norm1 = nn.LayerNorm(d_model)
         self.ff = FeedForward(d_model)       
         self.norm2 = nn.LayerNorm(d_model)
 
     def forward(self, x):
+        
+        x = self.emb(x)
         
         attn_outputs, _ = self.mul_attn(x, x, x, need_weights= False)
         x = self.norm1(x + attn_outputs)
@@ -39,14 +44,11 @@ class Encoder(nn.Module):
         return x
     
 class Decoder(nn.Module):
-    def __init__(self,
-                 d_model: int= 512,
-                 n_head: int= 8
-                 ):
-        
+    def __init__(self, d_model, n_head, vocab_size,  max_len, device, dropout_prop):
         super().__init__()
         
-        self.masked_attn = nn.MultiheadAttention(d_model, n_head, batch_first= True,)
+        self.emb = Embedding(vocab_size, d_model, max_len, device, dropout_prop)
+        self.masked_attn = nn.MultiheadAttention(d_model, n_head, batch_first= True)
         self.norm1 = nn.LayerNorm(d_model)
         
         self.cross_mul_attn = nn.MultiheadAttention(d_model, n_head, batch_first= True)
@@ -67,48 +69,22 @@ class Decoder(nn.Module):
         x = self.norm3(x + ff_outputs)
         
         return x       
-
-
-class PositionalEmbedding(nn.Module):
-    def __init__(self, d_model: int, max_len: int = 5000):
+    
+class FeedForward(nn.Module):
+    def __init__(self, d_model):
         super().__init__()
-        if d_model % 2 != 0:
-            raise ValueError("d_model must be even for sine/cosine positional embeddings")
-
-        self.d_model = d_model
         
-        pe = torch.zeros(max_len, d_model)
-        pos = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
-        div_term = torch.exp(torch.arange(0, d_model, 2, dtype=torch.float) * -(np.log(10000.0) / d_model))
-        pe[:, 0::2] = torch.sin(pos * div_term)
-        pe[:, 1::2] = torch.cos(pos * div_term)
-        pe = pe.unsqueeze(0)  
-        self.register_buffer('pe', pe)
-
+        self.linear1 = nn.Linear(d_model, 2048)
+        self.relu = nn.ReLU(inplace= True)
+        self.linear2 = nn.Linear(2048, d_model)
+        
     def forward(self, x):
-        """
-        x: Tensor of shape [batch_size, seq_len, d_model]
-        """
-        seq_len = x.size(1)
-        return self.pe[:, :seq_len]
-           
-
+        x = self.linear2(self.relu(self.linear1(x)))
+        return x
 class Transformer(nn.Module):
-    def __init__(
-                 self,
-                 d_model: int= 512, 
-                 n_head: int = 8,
-                 num_encoder: int= 16, 
-                 num_decoder: int= 16,
-                 vocab_size: int= 10000
-                 ):
+    def __init__(self, d_model, n_head, num_encoder, num_decoder, vocab_size, max_len, dropout_prop, device):
         super().__init__()
-        
-        self.input_embedding = nn.Embedding(vocab_size, d_model)
-        self.output_embedding = nn.Embedding(vocab_size, d_model)
-        
-        self.pos_embedding = PositionalEmbedding(d_model, max_len= 5000)
-        
+    
         self.decoder_blocks= nn.ModuleList()
         self.encoder_blocks= nn.ModuleList()
         
@@ -116,33 +92,23 @@ class Transformer(nn.Module):
         
         
         for _ in range(num_encoder):
-            self.encoder_blocks.append(Encoder(d_model, n_head))
+            self.encoder_blocks.append(Encoder(d_model, n_head, vocab_size,  max_len, device, dropout_prop))
             
         for _ in range(num_decoder):
-            self.decoder_blocks.append(Decoder(d_model, n_head))
+            self.decoder_blocks.append(Decoder(d_model, n_head, vocab_size,  max_len, device, dropout_prop))
             
 
-    def forward(self, x_input, x_output):
-        x_input = self.input_embedding(x_input)
-        x_output = self.output_embedding(x_output)
-        
-        pos_embedding1 = self.pos_embedding(x_input)
-        pos_embedding2 = self.pos_embedding(x_output)
-        
-        x_input += pos_embedding1
-        x_output += pos_embedding2
-       
-        encoder_inputs = x_input
+    def forward(self, x_encode, x_decode):
+        encoder_inputs = x_encode
         
         for encoder in self.encoder_blocks:      
             encoder_inputs = encoder(encoder_inputs)
         
         for decoder in self.decoder_blocks:
-            x_output = decoder(x_output, encoder_inputs)
-            
-        x_output = self.linear(x_output)
+            x_decode = decoder(x_decode, encoder_inputs)
         
-        return x_output
+        x_decode = self.linear(x_decode)
+        return x_decode
         
 
 def test():
